@@ -1,0 +1,10 @@
+/build/
+/artifacts/
+/.vs/
+/.idea/
+CMakeUserPresets.json
+*.user
+*.log
+.env
+.env.*
+__pycache__/
