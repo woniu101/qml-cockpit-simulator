@@ -1,9 +1,249 @@
 #include "SimulatorSmoke.h"
 #include "SimulatorWindow.h"
+#include "DriverConsole.h"
 #include <QtWidgets>
 #include <QtTest>
 #include <QStandardItemModel>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QJsonArray>
+#include <functional>
 #include <stdexcept>
+
+void runDriverSmoke(QApplication &app, QQuickWindow &window, SimServer &server) {
+    QTimer::singleShot(200, &app, [&] {
+        auto require = [](bool ok, const char *message) {
+            if (!ok)
+                throw std::runtime_error(message);
+        };
+        std::function<QQuickItem *(QQuickItem *,const QString &)> find;
+        find = [&](QQuickItem *parent,const QString &name) -> QQuickItem * {
+            if (parent->objectName()==name && parent->isVisible())
+                return parent;
+            for (auto *child : parent->childItems())
+                if (auto *item=find(child,name))
+                    return item;
+            return nullptr;
+        };
+        auto position = [&](const char *name) {
+            auto *item = find(window.contentItem(),QString::fromLatin1(name));
+            require(item && item->isVisible() && item->isEnabled(), name);
+            return item->mapToScene({item->width()/2, item->height()/2}).toPoint();
+        };
+        auto click = [&](const char *name) {
+            QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, position(name));
+            QTest::qWait(65);
+        };
+        auto state = [&] { return server.model()->snapshot(); };
+          const QString output = qEnvironmentVariable("SIMULATOR_SMOKE_DIR", "artifacts/driver");
+          auto capture = [&](const QString &name) {
+              QTest::qWait(120);
+              const auto frame = window.grabWindow();
+              require(!frame.isNull() && frame.save(output + "/" + name + ".png"), "driver screen capture");
+          };
+        try {
+            require(!window.icon().isNull(), "simulator window has the branded icon");
+              QDir().mkpath(output);
+              capture("cockpit");
+              click("driverThemeToggle");
+              capture("cockpit-night");
+              click("driverThemeToggle");
+            click("driverFullscreen");
+            QTest::qWait(300);
+            require(window.visibility() == QWindow::FullScreen, "enter full screen");
+            capture("cockpit-fullscreen");
+            QTest::keyClick(&window, Qt::Key_Escape);
+            QTest::qWait(300);
+            require(window.visibility() != QWindow::FullScreen, "Escape leaves full screen");
+            QTest::keyClick(&window, Qt::Key_F1);
+            QTest::qWait(170);
+            click("driverKeyWS");
+            click("driverBindthrottle");
+            QTest::keyClick(&window, Qt::Key_S);
+            auto *feedback = find(window.contentItem(), "driverKeyFeedback");
+            require(feedback && feedback->property("text").toString().contains(QStringLiteral("已被占用")),
+                    "duplicate key is rejected");
+            QTest::keyClick(&window, Qt::Key_T);
+            {
+                DriverConsole reloaded(server);
+                const auto keys = reloaded.keyLabels();
+                require(keys.value("throttle").toString() == "T" && keys.value("brake").toString() == "S",
+                        "custom key and preset are persisted");
+            }
+            capture("key-settings");
+            click("driverCloseKeys");
+            click("driverGearD");
+            require(state()["gear"] == "P", "brake interlock");
+            QTest::keyPress(&window, Qt::Key_S);
+            QTest::keyClick(&window, Qt::Key_4);
+            QTest::keyRelease(&window, Qt::Key_S);
+            require(state()["gear"] == "D", "held brake and keyboard shift enable D");
+            QTest::keyPress(&window, Qt::Key_T);
+            QTest::qWait(300);
+            require(server.model()->throttlePressed() && state()["speed"].toInt() > 0, "custom throttle accelerates");
+            require(find(window.contentItem(), "driverRoad")->property("distanceKm").toDouble() > 0,
+                    "vehicle distance advances the road");
+            QEvent deactivate(QEvent::WindowDeactivate);
+            QCoreApplication::sendEvent(&window, &deactivate);
+            require(!server.model()->throttlePressed(), "focus loss releases throttle");
+            QTest::keyRelease(&window, Qt::Key_T);
+            const auto throttle = position("driverThrottle");
+            QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, throttle);
+            QTest::qWait(850);
+            QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, throttle);
+            require(state()["speed"].toInt() >= 10, "hold throttle accelerates");
+            QTest::keyPress(&window, Qt::Key_S);
+            QTest::qWait(900);
+            QTest::keyRelease(&window, Qt::Key_S);
+            require(state()["speed"].toInt() == 0, "brake stops vehicle");
+            auto *road = find(window.contentItem(), "driverRoad");
+            require(road, "road view");
+            auto roadFrame = [&] {
+                const auto frame = window.grabWindow();
+                const double scale = double(frame.width()) / window.width();
+                const auto area = road->mapRectToScene({road->width() * 0.2, road->height() * 0.32,
+                                                       road->width() * 0.6, road->height() * 0.5});
+                return frame.copy(QRect(qRound(area.x() * scale), qRound(area.y() * scale),
+                                        qRound(area.width() * scale), qRound(area.height() * scale)))
+                    .convertToFormat(QImage::Format_RGB32);
+            };
+            auto difference = [&](const QImage &before, const QImage &after) {
+                require(!before.isNull() && before.size() == after.size(), "road frames have valid geometry");
+                double sum = 0;
+                int samples = 0;
+                for (int y = 0; y < before.height(); y += 3) {
+                    for (int x = 0; x < before.width(); x += 3) {
+                        const auto a = before.pixel(x, y), b = after.pixel(x, y);
+                        sum += std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b))
+                             + std::abs(qBlue(a) - qBlue(b));
+                        ++samples;
+                    }
+                }
+                return sum / (samples * 3);
+            };
+            const auto stoppedFrame = roadFrame();
+            QTest::qWait(350);
+            require(difference(stoppedFrame, roadFrame()) < 0.01, "road stays still at zero speed");
+            double slowTravel = 0, fastTravel = 0;
+            for (int speed : {10, 40, 80, 120}) {
+                require(server.control("setSpeed", {{"value", speed}}).isEmpty(), "set road test speed");
+                QTest::qWait(120);
+                const auto first = roadFrame();
+                first.save(output + QString("/road-%1-a.png").arg(speed));
+                const double start = road->property("distanceKm").toDouble();
+                QTest::qWait(450);
+                const auto second = roadFrame();
+                second.save(output + QString("/road-%1-b.png").arg(speed));
+                const double travel = (road->property("distanceKm").toDouble() - start) * 1000;
+                const double pixels = difference(first, second);
+                qInfo() << "Road speed" << speed << "km/h: travel" << travel << "m, pixel difference" << pixels;
+                require(pixels > 0.02 && travel > 0, "road visibly moves while driving");
+                if (speed == 10) slowTravel = travel;
+                if (speed == 80) fastTravel = travel;
+            }
+            require(fastTravel > slowTravel * 6 && fastTravel < slowTravel * 10,
+                    "road displacement follows vehicle speed");
+            server.control("setSpeed", {{"value", 0}});
+            server.control("setGear", {{"value", "R"}});
+            server.control("setSpeed", {{"value", 10}});
+            const double reverseStart = road->property("distanceKm").toDouble();
+            QTest::qWait(350);
+            require(road->property("distanceKm").toDouble() < reverseStart, "reverse moves the road backwards");
+            server.control("setSpeed", {{"value", 0}});
+            click("driverGearP");
+            require(state()["gear"] == "P", "park after stopping");
+            QTest::keyPress(&window, Qt::Key_X);
+            QTest::qWait(220);
+            click("driverBodyDrawer");
+            QTest::qWait(280);
+            require(!state()["windowMoving"].toArray().at(0).toBool(), "opening drawer releases keyboard window hold");
+            QTest::keyRelease(&window, Qt::Key_X);
+            const auto rocker = position("windowDown0");
+            QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, rocker);
+            QTest::qWait(290);
+            QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, rocker);
+            const auto opening = state()["windows"].toArray().at(0).toDouble();
+            require(opening > 5 && opening < 100, "rocker moves the window");
+            QTest::qWait(150);
+            require(state()["windows"].toArray().at(0).toDouble() == opening, "rocker release stops the window");
+            capture("body-drawer");
+            click("driverCloseDrawer");
+            QTest::qWait(280);
+            require(server.control("setGear", {{"value", "D"}}).isEmpty(), "drive gear for quick controls");
+            click("driverBodyDrawer");
+            QTest::qWait(180);
+            for (const auto *name : {"quickLockAction", "quickMirrorAction"}) {
+                const auto *action = find(window.contentItem(), name);
+                require(action && !action->isEnabled(), "park-only actions disabled in drive");
+            }
+            capture("body-drawer-drive");
+            QTest::keyClick(&window, Qt::Key_Escape);
+            QTest::qWait(180);
+            require(!find(window.contentItem(), "driverCloseDrawer"), "Escape closes quick controls");
+            require(server.control("setGear", {{"value", "P"}}).isEmpty(), "restore park gear");
+            click("driverTab1");
+            capture("body");
+            click("driverTab2");
+            click("driverChargePort");
+            click("driverChargePlug");
+            click("driverChargeStart");
+            require(state()["charging"].toBool(), "charging starts");
+              capture("charging");
+            click("driverChargeAdvance");
+            click("driverChargeAdvance");
+            require(!state()["charging"].toBool() && state()["soc"].toDouble() == 90, "charge target reached");
+              click("driverChargeTarget");
+              require(state()["chargeTarget"].toInt() == 75, "target slider commits on release");
+            auto *target = find(window.contentItem(), "driverChargeTarget");
+            auto *track = qvariant_cast<QQuickItem *>(target->property("background"));
+            require(track && qAbs(track->height() - 4) < 0.1, "charging slider keeps a thin track");
+            click("driverTab3");
+              click("driverPauseTelemetry");
+              require(server.telemetryPaused(), "driver diagnostics pauses telemetry");
+              capture("diagnostics");
+              click("driverPauseTelemetry");
+              require(!server.telemetryPaused(), "driver diagnostics resumes telemetry");
+              window.resize(740, 640);
+              QTest::qWait(250);
+            click("driverTab0");
+              capture("cockpit-compact");
+              const auto pedal = position("driverThrottle");
+              if (!QRect(QPoint(), window.size()).contains(pedal))
+                  qWarning() << "compact pedal position:" << pedal << "window:" << window.size();
+              require(QRect(QPoint(), window.size()).contains(pedal),
+                      "pedal controls remain reachable in a compact window");
+            click("driverBodyDrawer");
+            QTest::qWait(180);
+            const QRect compactWindow(QPoint(), window.size());
+            require(compactWindow.contains(position("windowDown3"))
+                    && compactWindow.contains(position("quickMirrorAction")),
+                    "quick controls remain reachable in a compact window");
+            capture("body-drawer-compact");
+            click("driverCloseDrawer");
+            QTest::qWait(180);
+            click("driverTab1");
+            capture("body-compact");
+            click("driverTab2");
+            capture("charging-compact-top");
+            auto *scroll = window.findChild<QObject *>("driverPageScroll");
+            require(scroll, "page scroll container");
+            auto *flickable = qvariant_cast<QQuickItem *>(scroll->property("contentItem"));
+            require(flickable, "page flickable");
+            flickable->setProperty("contentY", std::max(0.0, flickable->property("contentHeight").toDouble() - flickable->height()));
+            QTest::qWait(120);
+            auto *startControl = find(window.contentItem(), "driverChargeStart");
+            require(startControl, "compact charging button");
+            const auto startButton = startControl->mapToScene({startControl->width() / 2, startControl->height() / 2}).toPoint();
+            require(QRect(QPoint(), window.size()).contains(startButton), "compact charging actions are reachable by scrolling");
+            capture("charging-compact-controls");
+            qInfo() << "PASS driver cockpit: fullscreen, key remapping, focus loss, window drawer, charging and diagnostics";
+            app.exit(0);
+        } catch (const std::exception &error) {
+            qCritical() << "Driver cockpit test failed:" << error.what();
+            app.exit(2);
+        }
+    });
+}
 
 void runSimulatorSmoke(QApplication &app,SimulatorWindow &window,SimServer &server) {
     QTimer::singleShot(250,&app,[&]{

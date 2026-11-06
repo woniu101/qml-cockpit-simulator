@@ -6,6 +6,68 @@
 class SimulatorTests:public QObject {
     Q_OBJECT
 private slots:
+    void forwardSpeedLimitIs120() {
+        SimVehicle vehicle;
+        QVERIFY(vehicle.execute("setGear", {{"value", "D"}}).isEmpty());
+        QVERIFY(vehicle.execute("setSpeed", {{"value", 120}}).isEmpty());
+        QVERIFY(!vehicle.execute("setSpeed", {{"value", 121}}).isEmpty());
+        vehicle.setPedals(true, false);
+        QTest::qWait(100);
+        QCOMPARE(vehicle.snapshot()["speed"].toInt(), 120);
+        QVERIFY(VehicleProtocol::validState(vehicle.snapshot()));
+        auto invalid = vehicle.snapshot();
+        invalid["speed"] = 121;
+        QVERIFY(!VehicleProtocol::validState(invalid));
+        vehicle.setPedals(false, false);
+        QVERIFY(vehicle.execute("setGear", {{"value", "R"}}).isEmpty());
+        QCOMPARE(vehicle.snapshot()["speed"].toInt(), 15);
+        QVERIFY(!vehicle.execute("setSpeed", {{"value", 16}}).isEmpty());
+    }
+    void physicalPedalsAndShiftInterlocks() {
+        SimServer server;
+        auto *vehicle = server.model();
+        QVERIFY(!server.shiftFromDriver("D").isEmpty());
+        vehicle->setPedals(true, false);
+        QTest::qWait(100);
+        QCOMPARE(vehicle->snapshot()["speed"].toInt(), 0);
+        vehicle->setPedals(true, true);
+        QVERIFY(server.shiftFromDriver("D").isEmpty());
+        QTest::qWait(120);
+        QCOMPARE(vehicle->snapshot()["speed"].toInt(), 0);
+        vehicle->setPedals(true, false);
+        QTRY_VERIFY_WITH_TIMEOUT(vehicle->snapshot()["speed"].toInt() >= 12, 1800);
+        QVERIFY(!server.shiftFromDriver("R").isEmpty());
+        vehicle->setPedals(false, false);
+        const auto coastingSpeed = vehicle->snapshot()["speed"].toInt();
+        QTRY_VERIFY_WITH_TIMEOUT(vehicle->snapshot()["speed"].toInt() < coastingSpeed, 1000);
+        vehicle->setPedals(true, true);
+        QTRY_COMPARE_WITH_TIMEOUT(vehicle->snapshot()["speed"].toInt(), 0, 1800);
+        QTRY_VERIFY_WITH_TIMEOUT(vehicle->physicalShiftError("P").isEmpty(), 500);
+        QVERIFY(server.shiftFromDriver("P").isEmpty());
+        QVERIFY(vehicle->snapshot()["forwardKm"].toDouble() > 0);
+        QVERIFY(server.control("setPort", {{"value",true}}).isEmpty());
+        QVERIFY(server.control("setPlugged", {{"value",true}}).isEmpty());
+        QVERIFY(!server.shiftFromDriver("D").isEmpty());
+        QCOMPARE(vehicle->snapshot()["gear"].toString(), QString("P"));
+        QVERIFY(VehicleProtocol::validState(vehicle->snapshot()));
+    }
+
+    void staleWindowReleaseKeepsReplacementCommand() {
+        SimServer server;
+        const auto first = server.beginWindowHold(0, true);
+        QVERIFY(first != 0);
+        QTRY_VERIFY(server.model()->snapshot()["windows"].toArray()[0].toDouble() > 3);
+        server.endWindowHold(0, first);
+        const auto stopped = server.model()->snapshot()["windows"].toArray()[0].toDouble();
+        QTest::qWait(100);
+        QCOMPARE(server.model()->snapshot()["windows"].toArray()[0].toDouble(), stopped);
+        const auto second = server.beginWindowHold(0, true);
+        QVERIFY(second != 0);
+        QVERIFY(server.control("setWindow", {{"index",0},{"target",50}}).isEmpty());
+        server.endWindowHold(0, second);
+        QTRY_COMPARE_WITH_TIMEOUT(server.model()->snapshot()["windows"].toArray()[0].toDouble(), 50.0, 2000);
+    }
+
     void chargingInterlocksAndTargetChanges(){
         SimVehicle v;QVERIFY(!v.commandError("startCharging").isEmpty());
         QVERIFY(v.execute("setPort",{{"value",true}}).isEmpty());QVERIFY(v.execute("setPlugged",{{"value",true}}).isEmpty());QVERIFY(v.execute("startCharging",{}).isEmpty());

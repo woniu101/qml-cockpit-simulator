@@ -9,8 +9,26 @@ SimVehicle::SimVehicle(QObject *parent):QObject(parent) {
 QJsonObject SimVehicle::snapshot() const {
     QJsonArray actual,targets,moving,doors,doorMoving;
     for(int i=0;i<4;++i){actual.append(m_windows[i]);targets.append(m_targets[i]);moving.append(m_moving[i]);doors.append(m_doors[i]);doorMoving.append(m_doorRemaining[i]>0);}
-    return {{"soc",m_soc},{"gear",m_gear},{"speed",m_speed},{"tripKm",m_trip},{"forwardKm",m_forward},{"windows",actual},{"targets",targets},{"windowMoving",moving},{"doors",doors},{"doorMoving",doorMoving},
+    return {{"soc",m_soc},{"gear",m_gear},{"speed",qRound(m_speed)},{"tripKm",m_trip},{"forwardKm",m_forward},{"windows",actual},{"targets",targets},{"windowMoving",moving},{"doors",doors},{"doorMoving",doorMoving},
         {"locked",m_locked},{"hood",m_hood},{"hatch",m_hatch},{"hoodMoving",m_hoodRemaining>0},{"hatchMoving",m_hatchRemaining>0},{"port",m_port},{"mirrors",m_mirrors},{"plugged",m_plugged},{"charging",m_charging},{"chargeTarget",m_chargeTarget},{"chargePower",m_charging?55:0}};
+}
+void SimVehicle::setPedals(bool throttle, bool brake) {
+    if (m_throttle == throttle && m_brake == brake)
+        return;
+    m_throttle = throttle;
+    m_brake = brake;
+    emit changed();
+}
+
+QString SimVehicle::physicalShiftError(const QString &gear) const {
+    const auto error = commandError("setGear", {{"value", gear}});
+    if (!error.isEmpty() || gear == m_gear)
+        return error;
+    if (m_speed > 0)
+        return QStringLiteral("请先制动停稳再换挡");
+    if (m_gear == "P" && (gear == "D" || gear == "R") && !m_brake)
+        return QStringLiteral("请踩住刹车再换挡");
+    return {};
 }
 QString SimVehicle::driveError() const {
     if(m_soc<=0)return QStringLiteral("电量不足，请先充电");
@@ -52,7 +70,7 @@ QString SimVehicle::commandError(const QString &kind,const QJsonObject &a) const
         if(gear!="P"&&(m_plugged||m_charging))return QStringLiteral("请暂停充电并断开充电枪后换挡");
         if(gear=="D"||gear=="R")return driveError();
     }else if(kind=="setSpeed"){
-        if(!number(a["value"],0,m_gear=="R"?15:100,true))return QStringLiteral("车速超出允许范围");
+        if(!number(a["value"],0,m_gear=="R"?15:120,true))return QStringLiteral("车速超出允许范围");
         if(a["value"].toInt()>0){if(m_gear!="D"&&m_gear!="R")return QStringLiteral("请先挂入 D 或 R 挡");return driveError();}
     }else if(kind=="setPlugged"){
         if(!a["value"].isBool())return QStringLiteral("插枪参数无效");
@@ -90,10 +108,10 @@ QString SimVehicle::execute(const QString &kind,const QJsonObject &a) {
     else if(kind=="setGear"||kind=="startDriving"||kind=="park"){
         m_gear=kind=="startDriving"?"D":kind=="park"?"P":a["value"].toString();
         if(m_gear=="D"||m_gear=="R"){m_locked=true;m_mirrors=false;}
-        if(m_gear=="P"||m_gear=="N")m_speed=0;
-        if(m_gear=="R")m_speed=std::min(m_speed,15);
-        if(kind=="startDriving")m_speed=40;
-    }else if(kind=="setSpeed")m_speed=a["value"].toInt();
+        if(m_gear=="P"||m_gear=="N"){m_speed=0;m_pedalMotion=false;}
+        if(m_gear=="R")m_speed=std::min(m_speed,15.0);
+        if(kind=="startDriving"){m_speed=40;m_pedalMotion=m_throttle=m_brake=false;}
+    }else if(kind=="setSpeed"){m_speed=a["value"].toInt();m_pedalMotion=m_throttle=m_brake=false;}
     else if(kind=="setPlugged")m_plugged=value;
     else if(kind=="setChargeTarget"){m_chargeTarget=a["value"].toInt();if(m_soc>=m_chargeTarget)m_charging=false;}
     else if(kind=="startCharging")m_charging=true;
@@ -124,7 +142,19 @@ void SimVehicle::energy(double seconds) {
 }
 void SimVehicle::advance(double seconds){if(std::isfinite(seconds)&&seconds>0&&seconds<=3600){energy(seconds);emit changed();}}
 void SimVehicle::tick() {
-    const double dt=std::min(0.1,m_clock.restart()/1000.0);bool active=m_speed>0||m_charging;
+    const double dt=std::min(0.1,m_clock.restart()/1000.0);
+    bool active=m_speed>0||m_charging;
+    if ((m_gear=="D" || m_gear=="R") && m_soc>0) {
+        if (m_throttle || m_brake)
+            m_pedalMotion=true;
+        if (m_pedalMotion) {
+            const double acceleration=m_brake ? -38.0 : m_throttle ? 18.0 : -4.0;
+            m_speed=std::clamp(m_speed+acceleration*dt,0.0,m_gear=="R" ? 15.0 : 120.0);
+            active|=m_speed>0;
+            if (m_speed==0 && !m_throttle && !m_brake)
+                m_pedalMotion=false;
+        }
+    }
     energy(dt);
     for(int i=0;i<4;++i){
         if(m_moving[i]){active=true;const double step=dt*100/1.8;if(std::abs(m_targets[i]-m_windows[i])<=step){m_windows[i]=m_targets[i];m_moving[i]=false;}else m_windows[i]+=m_targets[i]>m_windows[i]?step:-step;}
@@ -133,4 +163,4 @@ void SimVehicle::tick() {
     if(m_hoodRemaining>0||m_hatchRemaining>0)active=true;m_hoodRemaining=std::max(0.0,m_hoodRemaining-dt);m_hatchRemaining=std::max(0.0,m_hatchRemaining-dt);
     if(active)emit changed();
 }
-void SimVehicle::reset(){m_windows.fill(0);m_targets.fill(0);m_moving.fill(false);m_doors.fill(false);m_doorRemaining.fill(0);m_hoodRemaining=m_hatchRemaining=0;m_gear="P";m_speed=0;m_chargeTarget=90;m_soc=82;m_trip=m_forward=0;m_locked=true;m_hood=m_hatch=m_port=m_plugged=m_charging=m_mirrors=false;emit changed();}
+void SimVehicle::reset(){m_windows.fill(0);m_targets.fill(0);m_moving.fill(false);m_doors.fill(false);m_doorRemaining.fill(0);m_hoodRemaining=m_hatchRemaining=0;m_gear="P";m_speed=0;m_pedalMotion=m_throttle=m_brake=false;m_chargeTarget=90;m_soc=82;m_trip=m_forward=0;m_locked=true;m_hood=m_hatch=m_port=m_plugged=m_charging=m_mirrors=false;emit changed();}

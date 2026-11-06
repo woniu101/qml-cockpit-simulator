@@ -85,6 +85,9 @@ void SimServer::checkPending(){
     if(completed.isEmpty())return;snapshot();for(const auto &key:completed){const auto p=m_pending.take(key);result(p.socket,p.id,"completed",QStringLiteral("已完成"));}
 }
 void SimServer::cancelResources(const QStringList &resources,const QString &reason){
+    for(int i=0;i<int(m_windowHolds.size());++i)
+        if(resources.contains("window"+QString::number(i)))
+            m_windowHolds[i]=0;
     cancelDelayed(resources,reason);
     QStringList cancelled;for(auto i=m_pending.cbegin();i!=m_pending.cend();++i)for(const auto &key:resources)if(i->resources.contains(key)){cancelled<<i.key();break;}
     for(const auto &key:cancelled){const auto p=m_pending.take(key);result(p.socket,p.id,"cancelled",reason);}
@@ -106,9 +109,30 @@ QString SimServer::control(const QString &action,const QJsonObject &args){
     }
     m_applying=true;const auto error=m_vehicle.inject(action,args);m_applying=false;if(!error.isEmpty()){log(error);return error;}
     if(action=="reset"){
+        m_windowHolds.fill(0);
         const auto pending=m_pending;m_pending.clear();for(const auto &p:pending)result(p.socket,p.id,"cancelled",QStringLiteral("模拟器已重置"));
         const auto delayed=m_delayed;m_delayed.clear();for(const auto &p:delayed)result(p.socket,p.message["id"].toString(),"cancelled",QStringLiteral("模拟器已重置，延迟指令已取消"));
     }
     else cancelResources(action=="window"?QStringList{"window"+QString::number(args["index"].toInt())}:SimVehicle::resources(action,args),QStringLiteral("状态已由模拟器修改"));
     log(QStringLiteral("控制台更新：")+action);snapshot();checkPending();return {};
+}
+
+QString SimServer::shiftFromDriver(const QString &gear) {
+    const auto error=m_vehicle.physicalShiftError(gear);
+    if(!error.isEmpty() || gear==m_vehicle.snapshot().value("gear").toString())
+        return error;
+    return control("setGear",{{"value",gear}});
+}
+
+quint32 SimServer::beginWindowHold(int index, bool opening) {
+    if(!control("setWindow",{{"index",index},{"target",opening?100:0}}).isEmpty())
+        return 0;
+    if(++m_nextHold==0)
+        ++m_nextHold;
+    return m_windowHolds[index]=m_nextHold;
+}
+
+void SimServer::endWindowHold(int index, quint32 hold) {
+    if(index>=0 && index<int(m_windowHolds.size()) && hold!=0 && m_windowHolds[index]==hold)
+        control("stopWindow",{{"index",index}});
 }
