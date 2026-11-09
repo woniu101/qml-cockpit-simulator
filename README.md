@@ -1,6 +1,33 @@
-# QML Cockpit Simulator
+<p align="center"><img src="assets/branding/logo.png" width="128" alt="QML Cockpit Simulator 标志"></p>
+<h1 align="center">QML Cockpit Simulator</h1>
+<p align="center"><strong>面向智能座舱的整车状态模拟与联调工具</strong></p>
 
-独立运行的 Qt / C++ 整车模拟器，为 [qml-cockpit](https://github.com/woniu101/qml-cockpit) 提供实时车辆状态和控制回执。两个仓库可以分别构建；通过本机进程通信联调。
+---
+
+<p align="center">
+  <a href="https://github.com/woniu101/qml-cockpit-simulator/releases"><img src="https://img.shields.io/badge/Version-0.2.0-527761" alt="版本 0.2.0"></a>
+  <img src="https://img.shields.io/badge/Qt-6.12-41CD52" alt="Qt 6.12">
+  <img src="https://img.shields.io/badge/Windows-x64-357ABD" alt="Windows x64">
+  <a href="https://github.com/woniu101/qml-cockpit"><img src="https://img.shields.io/badge/车机项目-协议_v1-527761" alt="车机项目，协议 v1"></a>
+</p>
+
+---
+
+<p align="center">
+  <a href="#下载与快速开始">下载</a> · <a href="#实操演示">实操演示</a> · <a href="#当前能力">功能</a> · <a href="#开发版运行">开发指南</a> · <a href="#协议与实现">协议</a>
+</p>
+
+独立运行的 Qt / C++ 整车模拟器，为 [QML Cockpit](https://github.com/woniu101/qml-cockpit) 提供实时车辆状态和控制回执。两个项目独立构建，通过本机进程通信联调。
+
+## 下载与快速开始
+
+Windows x64 便携包的发布入口为 [GitHub Releases](https://github.com/woniu101/qml-cockpit-simulator/releases)。获取压缩包后解压，运行 `QmlCockpitSimulator.exe`，或按[构建说明](#开发版运行)从源码运行。打开 [QML Cockpit](https://github.com/woniu101/qml-cockpit)，在顶栏将数据源切换为「外部模拟器」。
+
+## 实操演示
+
+[![模拟器驾驶主屏](docs/screenshots/driver.jpg)](https://github.com/woniu101/qml-cockpit#实操演示)
+
+查看[车机与模拟器实操演示](https://github.com/woniu101/qml-cockpit#实操演示)。右后车窗从 0% 调到 35% 的片段展示了目标下发、开度变化与结果回传。
 
 开发程序为 `build/QmlCockpitSimulator.exe`，窗口标题为“QML Cockpit Simulator · 整车模拟器”。图标与车机共用浅灰绿底，使用带脉冲线的芯片轮廓。多尺寸 Windows 图标可用 `scripts/create-app-icon.ps1` 重新生成。
 

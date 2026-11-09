@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(QmlCockpitSimulator VERSION 0.1 LANGUAGES CXX)
+project(QmlCockpitSimulator VERSION 0.2.0 LANGUAGES CXX)
 if(MSVC AND CMAKE_CL_SHOWINCLUDES_PREFIX MATCHES "娉|鍖")
     set(CMAKE_CL_SHOWINCLUDES_PREFIX "注意: 包含文件:  ")
 endif()
