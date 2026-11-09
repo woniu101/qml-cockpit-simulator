@@ -25,15 +25,19 @@
 
 ## 实操演示
 
-[![点击封面，在哔哩哔哩观看车机与模拟器联调演示](docs/screenshots/driver.jpg)](https://www.bilibili.com/video/BV1ewW46FEaL/)
+https://github.com/user-attachments/assets/ce32dbd2-25b4-4e8e-ae83-a713da0a0295
 
-[在哔哩哔哩观看车机与模拟器实操演示](https://www.bilibili.com/video/BV1ewW46FEaL/)。片中右后窗从 0% 调到 35%，可以看到指令下发、开度变化和回传。
+片中右后窗从 0% 调到 35%，可以看到指令下发、开度变化和回传。
+
+[在哔哩哔哩观看车机与模拟器实操演示](https://www.bilibili.com/video/BV1ewW46FEaL/)
 
 ## 主要功能
 
 - **驾驶模拟**：操作挡位和踏板，实时更新车速、里程和电量。
 - **车身与补能**：模拟门窗、门锁、后视镜、插枪和充电流程。
 - **联调诊断**：查看指令回执，可模拟遥测暂停、延迟、拒绝和断线。
+
+![模拟器驾驶主屏](docs/screenshots/driver.jpg)
 
 ## 从源码构建
 
