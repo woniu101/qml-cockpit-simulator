@@ -25,9 +25,9 @@
 
 ## 实操演示
 
-[![模拟器驾驶主屏](docs/screenshots/driver.jpg)](https://github.com/woniu101/qml-cockpit/releases/download/v0.2.0/QML-Cockpit-Demo.mp4)
+[![点击封面，在哔哩哔哩观看车机与模拟器联调演示](docs/screenshots/driver.jpg)](https://www.bilibili.com/video/BV1ewW46FEaL/)
 
-[观看或下载车机与模拟器实操演示](https://github.com/woniu101/qml-cockpit/releases/download/v0.2.0/QML-Cockpit-Demo.mp4)。片中右后窗从 0% 调到 35%，可以看到指令下发、开度变化和回传。
+[在哔哩哔哩观看车机与模拟器实操演示](https://www.bilibili.com/video/BV1ewW46FEaL/)。片中右后窗从 0% 调到 35%，可以看到指令下发、开度变化和回传。
 
 ## 主要功能
 
